@@ -23,36 +23,50 @@ def create_poster(text, output_path='poster.png'):
     # 使用支持emoji的字体路径
     emoji_font_path = '/System/Library/Fonts/Apple Color Emoji.ttc'
     
-    # 增大字体大小以提升清晰度
-    font_text = ImageFont.truetype(font_path, size=48)
-    font_title = ImageFont.truetype(font_path, size=72)
-    font_emoji = ImageFont.truetype(emoji_font_path, 48, encoding='unic')
+    # 设置字体大小以提升清晰度
+    font_size_text = 48
+    font_size_title = 72
 
-    # 增大图像宽度和高度以提升清晰度
+    font_text = ImageFont.truetype(font_path, size=font_size_text)
+    font_title = ImageFont.truetype(font_path, size=font_size_title)
+    font_emoji = ImageFont.truetype(emoji_font_path, font_size_text, encoding='unic')
+
+    # 设置图像的初始宽高和边距
     image_width = 1600
     margin = 100
     line_spacing = 20
     max_line_chars = 40
 
+    # 计算文本高度
     text_height = font_text.getbbox('A')[3] - font_text.getbbox('A')[1]
 
+    # 对文本进行换行
     wrapped_text_lines = []
     for paragraph in text.split('\n'):
         wrapped_lines = textwrap.wrap(paragraph, width=max_line_chars)
         wrapped_text_lines.extend(wrapped_lines + [''])
 
+    # 计算图像所需高度和最大宽度
     lines = len(wrapped_text_lines)
-    image_height = margin * 2 + lines * (text_height + line_spacing)
+    title = "今日币圈大事件"
+    title_height = font_title.getbbox(title)[3] - font_title.getbbox(title)[1]
+    image_height = margin * 2 + title_height + margin // 2 + lines * (text_height + line_spacing)
 
+    # 计算文本的最大宽度
+    text_line_widths = [font_text.getbbox(line)[2] - font_text.getbbox(line)[0] for line in wrapped_text_lines if line.strip()]
+    max_text_width = max(text_line_widths) if text_line_widths else 0
+    image_width = max(image_width, max_text_width + 2 * margin)
+
+    # 创建图像
     image = Image.new('RGBA', (image_width, image_height), color=(255, 255, 255))
     draw = ImageDraw.Draw(image)
 
-    title = "今日币圈大事件"
+    # 绘制标题
     title_bbox = draw.textbbox((0, 0), title, font=font_title)
     title_width = title_bbox[2] - title_bbox[0]
     draw.text(((image_width - title_width) / 2, margin // 2), title, font=font_title, fill="black", embedded_color=True)
 
-    current_h = margin + title_bbox[3] + margin // 2
+    current_h = margin + title_height + margin // 2
 
     # 渲染正文内容，并将 emoji 显示为彩色
     for line in wrapped_text_lines:
