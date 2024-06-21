@@ -1,19 +1,17 @@
 import ccxt
 import asyncio
-
 import pandas as pd
 import numpy as np
-from PIL import Image
-
+from PIL import Image, ImageEnhance
 from telegram import Bot
 from telegram.constants import ParseMode
-
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
-
 from pa.patterns import *
 from pa.pa_index import *
 import os
 import glob
+
+
 
 def delete_images_in_folder(folder_path):
     # 构建搜索模式以匹配所有的.png文件
@@ -24,6 +22,14 @@ def delete_images_in_folder(folder_path):
     for file in files:
         os.remove(file)
     print("All images in the folder have been deleted.")
+
+
+def calculate_atr(df, period=14):
+    df['TR'] = np.maximum((df['High'] - df['Low']), 
+                          np.maximum(abs(df['High'] - df['Close'].shift()), 
+                                     abs(df['Low'] - df['Close'].shift())))
+    df['ATR'] = df['TR'].rolling(window=period).mean()
+    return df
 
 
 # 配置 Telegram Bot
@@ -95,7 +101,7 @@ print("Top 50 USDT pairs by market volume:")
 print(symbols)
 
 # 获取交易对的K线数据
-def fetch_ohlcv(symbol, timeframe='1d', limit=100):
+def fetch_ohlcv(symbol, timeframe='1h', limit=100):
     ohlcv = binance.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
     df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
@@ -132,19 +138,92 @@ def detect_pattern(df):
 def combine_images(image_paths, output_path, rows=1):
     images = [Image.open(image) for image in image_paths]
     
+    # 获取图片的尺寸
     widths, heights = zip(*(i.size for i in images))
     
     total_width = max(widths)
     total_height = sum(heights)
     
+    # 创建一个新的空白图片对象
     combined_image = Image.new('RGB', (total_width, total_height))
     
     y_offset = 0
     for image in images:
         combined_image.paste(image, (0, y_offset))
         y_offset += image.size[1]
-    
-    combined_image.save(output_path)
+
+    # 提高图片的清晰度和对比度
+    sharpness_enhancer = ImageEnhance.Sharpness(combined_image)
+    clarity_enhancer = ImageEnhance.Contrast(combined_image)
+
+    enhanced_image = sharpness_enhancer.enhance(2.0)  # 锐化处理
+    enhanced_image = clarity_enhancer.enhance(1.5)  # 对比度增强
+
+    # 保存合并后的图片并提高分辨率
+    enhanced_image.save(output_path, dpi=(300, 300))
+
+
+import asyncio
+from datetime import datetime, timedelta
+
+async def run_at_specific_time():
+    while True:
+        now = datetime.now()
+        # 计算下一个整点过30秒的时间
+        next_run_time = (now + timedelta(hours=1)).replace(minute=0, second=30, microsecond=0)
+        # 计算当前时间到下一个运行时间的等待秒数
+        wait_seconds = (next_run_time - now).total_seconds()
+
+        print(f"Next run at: {next_run_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        await asyncio.sleep(wait_seconds)
+
+        # 运行您的主要任务函数
+        await main()
+
+
+# 回测策略
+def backtest_strategy(symbol, limit=240, atr_period=14, atr_multiplier=2):
+    df = fetch_ohlcv(symbol, limit=limit)
+    df = calculate_atr(df, period=atr_period)
+    df = detect_pa_index_patterns(df)  # 检测形态
+
+    trades = 0
+    wins = 0
+    print(df['Zone'].tolist())
+
+    for i in range(1, len(df)):
+        if df['Zone'].iloc[i-1] == 'Straddle' and df['Zone'].iloc[i] != 'Straddle':
+            entry_price = df['Close'].iloc[i]
+            atr_value = df['ATR'].iloc[i]
+
+            print(entry_price)
+            print(df['Close'].iloc[i-1])
+            if entry_price < df['Close'].iloc[i-1]:
+                # 假设开空单
+                stop_loss = entry_price + atr_multiplier * atr_value
+                take_profit = entry_price - atr_multiplier * atr_value
+                trades += 1
+                for j in range(i, len(df)):
+                    if df['Low'].iloc[j] <= stop_loss:
+                        break
+                    if df['High'].iloc[j] >= take_profit:
+                        wins += 1
+                        break
+
+            if entry_price > df['Close'].iloc[i-1]:
+                # 假设开多单
+                stop_loss = entry_price - atr_multiplier * atr_value
+                take_profit = entry_price + atr_multiplier * atr_value
+                trades += 1
+                for j in range(i, len(df)):
+                    if df['High'].iloc[j] >= take_profit:
+                        wins += 1
+                        break
+                    if df['Low'].iloc[j] <= stop_loss:
+                        break
+
+    winrate = (wins / trades) * 100 if trades > 0 else 0
+    return winrate, trades
 
 
 # 检测特定形态并发送消息
@@ -171,4 +250,7 @@ async def main():
 
 
 # 运行主任务
-asyncio.run(main())
+# asyncio.run(run_at_specific_time())
+# asyncio.run(main())
+
+print(backtest_strategy('BTCUSDT'))
