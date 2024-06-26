@@ -2,15 +2,62 @@ import ccxt
 import asyncio
 import pandas as pd
 import numpy as np
-from PIL import Image, ImageEnhance
+from PIL import Image, ImageEnhance, ImageDraw, ImageFont
 from telegram import Bot
 from telegram.constants import ParseMode
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 from pa.patterns import *
 from pa.pa_index import *
+from pa.crypto_info import *
+from pa.sup_res import *
 import os
 import glob
 
+
+def create_report_image(symbol, df, patterns, support_level, resistance_level, output_path):
+    # 创建一张空白图片作为报告的背景
+    report_image = Image.new('RGB', (1200, 1800), 'white')
+    draw = ImageDraw.Draw(report_image)
+    title_font = ImageFont.truetype('/Users/lingyu/Library/Fonts/NotoSansSC-Regular.ttf', 40)
+    font = ImageFont.truetype('/Users/lingyu/Library/Fonts/NotoSansSC-Regular.ttf', 20)
+
+    # 绘制标题
+    draw.text((50, 30), f'交易信号报告: {symbol}', font=title_font, fill='black')
+
+    # 添加K线图（放置在顶部）
+    kline_path = f"imgs/{symbol.replace('/', '-')}_kline.png"
+    plot_with_oscillator(df, symbol, filename=kline_path, support=support_level, resistance=resistance_level)
+
+    kline_image = Image.open(kline_path)
+    kline_image = kline_image.resize((1100, 600), Image.LANCZOS)  # 使用Image.LANCZOS替代Image.ANTIALIAS
+    report_image.paste(kline_image, (50, 100))
+
+    text_y = 750
+
+    # 添加段落标题
+    draw.text((50, text_y), 'K线识别结果:', font=title_font, fill='black')
+    text_y += 50
+    draw.text((50, text_y), f'Patterns Detected: {", ".join(patterns)}', font=font, fill='black')
+
+    # 留出足够的行间距
+    text_y += 40
+    draw.text((50, text_y), '支撑位和阻力位:', font=title_font, fill='black')
+    text_y += 50
+    draw.text((50, text_y), f'Support Level: {support_level}', font=font, fill='black')
+    text_y += 30
+    draw.text((50, text_y), f'Resistance Level: {resistance_level}', font=font, fill='black')
+
+    # 其他相关信息
+    text_y += 50
+    draw.text((50, text_y), '币种详细信息:', font=title_font, fill='black')
+    text_y += 50
+    crypto_info = get_crypto_info(binance, symbol)
+    draw.text((50, text_y), f'Market Cap: {crypto_info["market_cap"]}', font=font, fill='black')
+    text_y += 30
+    # draw.text((50, text_y), f'Info: {crypto_info["info"]}', font=font, fill='black')
+
+    # 保存最终的报告图片
+    report_image.save(output_path)
 
 
 def delete_images_in_folder(folder_path):
@@ -63,13 +110,20 @@ async def process_and_send_patterns(patterns_detected, chat_id, bot_token):
                 df = fetch_ohlcv(symbol)
                 df = detect_pa_index_patterns(df)
                 image_path = f"imgs/{symbol.replace('/', '-')}_{pattern.lower()}.png"
-                plot_with_oscillator(df, symbol, filename=image_path)
+
+                candle_patterns = detect_candlestick_patterns(df)
+                support_levels, resistance_levels = calculate_recent_support_resistance(df)
+
+                # 画图
+                # plot_with_oscillator(df, symbol, filename=image_path)
+                create_report_image(symbol, df, candle_patterns, support_levels, resistance_levels, image_path)
                 image_paths.append(image_path)
 
             if image_paths:
                 combined_image_path = f"imgs/{pattern.lower()}_combined.png"
                 combine_images(image_paths, combined_image_path)
                 await send_photo_via_bot(combined_image_path, chat_id, bot_token)
+
     # 在发送完成后删除imgs路径下的所有图片
     delete_images_in_folder("imgs")
 
@@ -101,7 +155,7 @@ print("Top 50 USDT pairs by market volume:")
 print(symbols)
 
 # 获取交易对的K线数据
-def fetch_ohlcv(symbol, timeframe='1h', limit=100):
+def fetch_ohlcv(symbol, timeframe='5m', limit=100):
     ohlcv = binance.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
     df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
@@ -189,28 +243,25 @@ def backtest_strategy(symbol, limit=240, atr_period=14, atr_multiplier=2):
 
     trades = 0
     wins = 0
-    print(df['Zone'].tolist())
 
-    for i in range(1, len(df)):
-        if df['Zone'].iloc[i-1] == 'Straddle' and df['Zone'].iloc[i] != 'Straddle':
+    for i in range(5, len(df)):
+        if all(df['Zone'].iloc[i-j] == 'Straddle' for j in range(1, 6)) and df['Zone'].iloc[i] != 'Straddle':
             entry_price = df['Close'].iloc[i]
             atr_value = df['ATR'].iloc[i]
 
-            print(entry_price)
-            print(df['Close'].iloc[i-1])
             if entry_price < df['Close'].iloc[i-1]:
                 # 假设开空单
                 stop_loss = entry_price + atr_multiplier * atr_value
                 take_profit = entry_price - atr_multiplier * atr_value
                 trades += 1
                 for j in range(i, len(df)):
-                    if df['Low'].iloc[j] <= stop_loss:
-                        break
-                    if df['High'].iloc[j] >= take_profit:
+                    if df['Low'].iloc[j] <= take_profit:
                         wins += 1
                         break
+                    if df['High'].iloc[j] >= stop_loss:
+                        break
 
-            if entry_price > df['Close'].iloc[i-1]:
+            elif entry_price > df['Close'].iloc[i-1]:
                 # 假设开多单
                 stop_loss = entry_price - atr_multiplier * atr_value
                 take_profit = entry_price + atr_multiplier * atr_value
@@ -238,7 +289,8 @@ async def main():
         df = fetch_ohlcv(symbol)
         df = detect_pa_index_patterns(df)
 
-        if df['Zone'].iloc[-1] == 'Straddle':
+        # if df['Zone'].iloc[-1] == 'Straddle':
+        if all(df['Zone'].iloc[-1-j] == 'Straddle' for j in range(1, 6)) and df['Zone'].iloc[-1] != 'Straddle':
             patterns_detected['Straddle'].append(symbol)
         elif df['Zone'].iloc[-1] == 'Oversold':
             patterns_detected['Oversold'].append(symbol)
@@ -251,6 +303,6 @@ async def main():
 
 # 运行主任务
 # asyncio.run(run_at_specific_time())
-# asyncio.run(main())
+asyncio.run(main())
 
-print(backtest_strategy('BTCUSDT'))
+# print(backtest_strategy('BTCUSDT'))
