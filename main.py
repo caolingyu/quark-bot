@@ -6,7 +6,7 @@ from PIL import Image, ImageEnhance, ImageDraw, ImageFont
 from telegram import Bot
 from telegram.constants import ParseMode
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
-from pa.patterns import *
+from pa.pa_patterns import *
 from pa.pa_index import *
 from pa.crypto_info import *
 from pa.sup_res import *
@@ -14,15 +14,86 @@ import os
 import glob
 
 
-def create_report_image(symbol, df, patterns, support_level, resistance_level, output_path):
+def draw_multiline_text(draw, text, position, font, max_width, fill):
+    lines = []
+    words = text.split(' ')
+    line = ""
+    for word in words:
+        test_line = line + word + " "
+        bbox = draw.textbbox((0, 0), test_line, font=font)
+        if bbox[2] <= max_width:
+            line = test_line
+        else:
+            lines.append(line)
+            line = word + " "
+    lines.append(line)
+    
+    y = position[1]
+    for line in lines:
+        draw.text((position[0], y), line, font=font, fill=fill)
+        bbox = draw.textbbox((0, 0), line, font=font)
+        y += bbox[3] - bbox[1]
+    return y  # Return the y position after the text has been drawn
+
+
+def combine_images(image_paths, output_path, title=None):
+    images = [Image.open(image_path) for image_path in image_paths]
+    widths, heights = zip(*(image.size for image in images))
+
+    total_height = sum(heights)
+    max_width = max(widths)
+
+    combined_image = Image.new('RGB', (max_width, total_height + 100), 'white')
+    y_offset = 100
+
+    draw = ImageDraw.Draw(combined_image)
+    title_font = ImageFont.truetype('/Users/lingyu/Library/Fonts/NotoSansSC-Regular.ttf', 60)
+
+    if title:
+        draw.text((10, 10), title, font=title_font, fill='black')
+
+    for image in images:
+        combined_image.paste(image, (0, y_offset))
+        y_offset += image.size[1]
+
+    combined_image.save(output_path)
+
+# def combine_images(image_paths, output_path, rows=1):
+#     images = [Image.open(image) for image in image_paths]
+    
+#     # 获取图片的尺寸
+#     widths, heights = zip(*(i.size for i in images))
+    
+#     total_width = max(widths)
+#     total_height = sum(heights)
+    
+#     # 创建一个新的空白图片对象
+#     combined_image = Image.new('RGB', (total_width, total_height))
+    
+#     y_offset = 0
+#     for image in images:
+#         combined_image.paste(image, (0, y_offset))
+#         y_offset += image.size[1]
+
+#     # 提高图片的清晰度和对比度
+#     sharpness_enhancer = ImageEnhance.Sharpness(combined_image)
+#     clarity_enhancer = ImageEnhance.Contrast(combined_image)
+
+#     enhanced_image = sharpness_enhancer.enhance(2.0)  # 锐化处理
+#     enhanced_image = clarity_enhancer.enhance(1.5)  # 对比度增强
+
+#     # 保存合并后的图片并提高分辨率
+#     enhanced_image.save(output_path, dpi=(300, 300))
+
+def create_report_image(symbol, df, patterns, support_level, resistance_level, output_path, timeframe):
     # 创建一张空白图片作为报告的背景
     report_image = Image.new('RGB', (1200, 1800), 'white')
     draw = ImageDraw.Draw(report_image)
     title_font = ImageFont.truetype('/Users/lingyu/Library/Fonts/NotoSansSC-Regular.ttf', 40)
-    font = ImageFont.truetype('/Users/lingyu/Library/Fonts/NotoSansSC-Regular.ttf', 20)
+    font = ImageFont.truetype('/Users/lingyu/Library/Fonts/NotoSansSC-Regular.ttf', 30)
 
     # 绘制标题
-    draw.text((50, 30), f'交易信号报告: {symbol}', font=title_font, fill='black')
+    draw.text((50, 30), f'交易信号报告: {symbol} - {timeframe}', font=title_font, fill='black')
 
     # 添加K线图（放置在顶部）
     kline_path = f"imgs/{symbol.replace('/', '-')}_kline.png"
@@ -34,28 +105,34 @@ def create_report_image(symbol, df, patterns, support_level, resistance_level, o
 
     text_y = 750
 
-    # 添加段落标题
     draw.text((50, text_y), 'K线识别结果:', font=title_font, fill='black')
     text_y += 50
-    draw.text((50, text_y), f'Patterns Detected: {", ".join(patterns)}', font=font, fill='black')
+    text_y = draw_multiline_text(draw, f'检测到的K线形态: {", ".join(patterns)}', (50, text_y), font, 1100, 'black')
 
     # 留出足够的行间距
-    text_y += 40
+    text_y += 80
     draw.text((50, text_y), '支撑位和阻力位:', font=title_font, fill='black')
     text_y += 50
-    draw.text((50, text_y), f'Support Level: {support_level}', font=font, fill='black')
+    draw.text((50, text_y), f'支撑位: {support_level}', font=font, fill='black')
     text_y += 30
-    draw.text((50, text_y), f'Resistance Level: {resistance_level}', font=font, fill='black')
+    draw.text((50, text_y), f'阻力位: {resistance_level}', font=font, fill='black')
 
     # 其他相关信息
-    text_y += 50
+    text_y += 80
+    crypto_info = get_crypto_info(binance, symbol)
     draw.text((50, text_y), '币种详细信息:', font=title_font, fill='black')
     text_y += 50
-    crypto_info = get_crypto_info(binance, symbol)
-    draw.text((50, text_y), f'Market Cap: {crypto_info["market_cap"]}', font=font, fill='black')
+    text_y = draw_multiline_text(draw, f'市值: {crypto_info["market_cap"]}', (50, text_y), font, 1100, 'black')
     text_y += 30
-    # draw.text((50, text_y), f'Info: {crypto_info["info"]}', font=font, fill='black')
-
+    text_y = draw_multiline_text(draw, f'最新价格: {crypto_info["last_price"]}', (50, text_y), font, 1100, 'black')
+    text_y += 30
+    text_y = draw_multiline_text(draw, f'24小时成交量: {crypto_info["24h_volume"]}', (50, text_y), font, 1100, 'black')
+    text_y += 30
+    text_y = draw_multiline_text(draw, f'1小时涨跌幅: {crypto_info["change_1h"]:.2f}%', (50, text_y), font, 1100, 'black')
+    text_y += 30
+    text_y = draw_multiline_text(draw, f'4小时涨跌幅: {crypto_info["change_4h"]:.2f}%', (50, text_y), font, 1100, 'black')
+    text_y += 30
+    text_y = draw_multiline_text(draw, f'24小时涨跌幅: {crypto_info["change_24h"]:.2f}%', (50, text_y), font, 1100, 'black')
     # 保存最终的报告图片
     report_image.save(output_path)
 
@@ -99,14 +176,21 @@ async def send_photo_via_bot(photo_path, chat_id, bot_token):
     await bot.send_photo(chat_id=chat_id, photo=open(photo_path, 'rb'))
 
 
-async def process_and_send_patterns(patterns_detected, chat_id, bot_token):
+
+async def process_and_send_patterns(patterns_detected, chat_id, bot_token, timeframe):
+    pattern_to_desc_map = {
+        "Straddle": "盘整突破",
+        "Overbought": "超买",
+        "Oversold": "超卖"
+    }    
+
     for pattern, symbols in patterns_detected.items():
         if symbols:
             symbols_text = ", ".join(symbols)
-            await send_message_via_bot(f"Detected {pattern} in symbols: {symbols_text}", chat_id, bot_token)
+            await send_message_via_bot(f"检测到 【{timeframe}】 级别 【{pattern_to_desc_map.get(pattern)}】的币种：{symbols_text}", chat_id, bot_token)
 
             image_paths = []
-            for symbol in symbols:
+            for symbol in symbols[:3]:
                 df = fetch_ohlcv(symbol)
                 df = detect_pa_index_patterns(df)
                 image_path = f"imgs/{symbol.replace('/', '-')}_{pattern.lower()}.png"
@@ -116,12 +200,12 @@ async def process_and_send_patterns(patterns_detected, chat_id, bot_token):
 
                 # 画图
                 # plot_with_oscillator(df, symbol, filename=image_path)
-                create_report_image(symbol, df, candle_patterns, support_levels, resistance_levels, image_path)
+                create_report_image(symbol, df, candle_patterns, support_levels, resistance_levels, image_path, timeframe)
                 image_paths.append(image_path)
 
             if image_paths:
                 combined_image_path = f"imgs/{pattern.lower()}_combined.png"
-                combine_images(image_paths, combined_image_path)
+                combine_images(image_paths, combined_image_path, title=pattern_to_desc_map.get(pattern))
                 await send_photo_via_bot(combined_image_path, chat_id, bot_token)
 
     # 在发送完成后删除imgs路径下的所有图片
@@ -149,13 +233,13 @@ for symbol, ticker in tickers.items():
 
 # 按交易量排序，选择前50名
 top_usdt_pairs = sorted(usdt_pairs, key=lambda x: x[1], reverse=True)[:50]
-symbols = [symbol for symbol, _ in top_usdt_pairs]
+symbols = [symbol for symbol, _ in top_usdt_pairs if symbol not in ['USDC/USDT', 'EUR/USDT']]
 
 print("Top 50 USDT pairs by market volume:")
 print(symbols)
 
 # 获取交易对的K线数据
-def fetch_ohlcv(symbol, timeframe='5m', limit=100):
+def fetch_ohlcv(symbol, timeframe='15m', limit=100):
     ohlcv = binance.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
     df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
@@ -187,34 +271,6 @@ def detect_pattern(df):
     df.loc[short_condition, 'Pattern'] = 'Short'
     
     return df
-
-
-def combine_images(image_paths, output_path, rows=1):
-    images = [Image.open(image) for image in image_paths]
-    
-    # 获取图片的尺寸
-    widths, heights = zip(*(i.size for i in images))
-    
-    total_width = max(widths)
-    total_height = sum(heights)
-    
-    # 创建一个新的空白图片对象
-    combined_image = Image.new('RGB', (total_width, total_height))
-    
-    y_offset = 0
-    for image in images:
-        combined_image.paste(image, (0, y_offset))
-        y_offset += image.size[1]
-
-    # 提高图片的清晰度和对比度
-    sharpness_enhancer = ImageEnhance.Sharpness(combined_image)
-    clarity_enhancer = ImageEnhance.Contrast(combined_image)
-
-    enhanced_image = sharpness_enhancer.enhance(2.0)  # 锐化处理
-    enhanced_image = clarity_enhancer.enhance(1.5)  # 对比度增强
-
-    # 保存合并后的图片并提高分辨率
-    enhanced_image.save(output_path, dpi=(300, 300))
 
 
 import asyncio
@@ -276,6 +332,7 @@ def backtest_strategy(symbol, limit=240, atr_period=14, atr_multiplier=2):
     winrate = (wins / trades) * 100 if trades > 0 else 0
     return winrate, trades
 
+TIMEFRAME = ['15m', '1h', '4h']
 
 # 检测特定形态并发送消息
 async def main():
@@ -285,20 +342,20 @@ async def main():
         "Straddle": []
     }
 
-    for symbol in symbols:
-        df = fetch_ohlcv(symbol)
-        df = detect_pa_index_patterns(df)
+    for tf in TIMEFRAME:
+        for symbol in symbols:
+            df = fetch_ohlcv(symbol, timeframe=tf)
+            df = detect_pa_index_patterns(df)
 
-        # if df['Zone'].iloc[-1] == 'Straddle':
-        if all(df['Zone'].iloc[-1-j] == 'Straddle' for j in range(1, 6)) and df['Zone'].iloc[-1] != 'Straddle':
-            patterns_detected['Straddle'].append(symbol)
-        elif df['Zone'].iloc[-1] == 'Oversold':
-            patterns_detected['Oversold'].append(symbol)
-        elif df['Zone'].iloc[-1] == 'Overbought':
-            patterns_detected['Overbought'].append(symbol)
+            # if df['Zone'].iloc[-1] == 'Straddle':
+            if all(df['Zone'].iloc[-1-j] == 'Straddle' for j in range(1, 6)) and df['Zone'].iloc[-1] != 'Straddle':
+                patterns_detected['Straddle'].append(symbol)
+            elif df['Zone'].iloc[-1] == 'Oversold':
+                patterns_detected['Oversold'].append(symbol)
+            elif df['Zone'].iloc[-1] == 'Overbought':
+                patterns_detected['Overbought'].append(symbol)
 
-    print(patterns_detected)
-    await process_and_send_patterns(patterns_detected, chat_id=chat_id, bot_token=bot_token)
+        await process_and_send_patterns(patterns_detected, chat_id=chat_id, bot_token=bot_token, timeframe=tf)
 
 
 # 运行主任务
