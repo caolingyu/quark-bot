@@ -1,2 +1,2 @@
-docker build -t your_project_name .
-docker run -d --name your_container_name your_project_name
+docker build -t quark_bot . --no-cache
+docker run -d -v ./config.py:/config/config.py --name quark_bot_container quark_bot

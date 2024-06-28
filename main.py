@@ -5,13 +5,15 @@ import numpy as np
 from PIL import Image, ImageEnhance, ImageDraw, ImageFont
 from telegram import Bot
 from telegram.constants import ParseMode
-from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, USING_PROXY
 from pa.pa_patterns import *
 from pa.pa_index import *
 from pa.crypto_info import *
 from pa.sup_res import *
 import os
 import glob
+from retry import retry
+
 
 
 def draw_multiline_text(draw, text, position, font, max_width, fill):
@@ -33,7 +35,7 @@ def draw_multiline_text(draw, text, position, font, max_width, fill):
         draw.text((position[0], y), line, font=font, fill=fill)
         bbox = draw.textbbox((0, 0), line, font=font)
         y += bbox[3] - bbox[1]
-    return y  # Return the y position after the text has been drawn
+    return y  # 返回绘制后的 y 坐标
 
 
 def combine_images(image_paths, output_path, title=None):
@@ -86,55 +88,62 @@ def combine_images(image_paths, output_path, title=None):
 #     enhanced_image.save(output_path, dpi=(300, 300))
 
 def create_report_image(symbol, df, patterns, support_level, resistance_level, output_path, timeframe):
-    # 创建一张空白图片作为报告的背景
-    report_image = Image.new('RGB', (1200, 1800), 'white')
+    # 设置图像尺寸，增加分辨率
+    final_width = 1200
+    final_height = 1800
+    high_res_multiplier = 2  # 分辨率倍数
+    width = final_width * high_res_multiplier
+    height = final_height * high_res_multiplier
+
+    # 创建一张高分辨率的空白图片作为报告的背景
+    report_image = Image.new('RGB', (width, height), 'white')
     draw = ImageDraw.Draw(report_image)
-    title_font = ImageFont.truetype('/Users/lingyu/Library/Fonts/NotoSansSC-Regular.ttf', 40)
-    font = ImageFont.truetype('/Users/lingyu/Library/Fonts/NotoSansSC-Regular.ttf', 30)
+    title_font = ImageFont.truetype('/Users/lingyu/Library/Fonts/NotoSansSC-Regular.ttf', int(40 * high_res_multiplier))
+    font = ImageFont.truetype('/Users/lingyu/Library/Fonts/NotoSansSC-Regular.ttf', int(30 * high_res_multiplier))
 
     # 绘制标题
-    draw.text((50, 30), f'交易信号报告: {symbol} - {timeframe}', font=title_font, fill='black')
+    draw.text((50 * high_res_multiplier, 30 * high_res_multiplier), f'交易信号报告: {symbol} - {timeframe}', font=title_font, fill='black')
 
     # 添加K线图（放置在顶部）
     kline_path = f"imgs/{symbol.replace('/', '-')}_kline.png"
     plot_with_oscillator(df, symbol, filename=kline_path, support=support_level, resistance=resistance_level)
 
     kline_image = Image.open(kline_path)
-    kline_image = kline_image.resize((1100, 600), Image.LANCZOS)  # 使用Image.LANCZOS替代Image.ANTIALIAS
-    report_image.paste(kline_image, (50, 100))
+    kline_image = kline_image.resize((1100 * high_res_multiplier, 600 * high_res_multiplier), Image.LANCZOS)
+    report_image.paste(kline_image, (50 * high_res_multiplier, 100 * high_res_multiplier))
 
-    text_y = 750
+    text_y = 750 * high_res_multiplier
 
-    draw.text((50, text_y), 'K线识别结果:', font=title_font, fill='black')
-    text_y += 50
-    text_y = draw_multiline_text(draw, f'检测到的K线形态: {", ".join(patterns)}', (50, text_y), font, 1100, 'black')
+    draw.text((50 * high_res_multiplier, text_y), 'K线识别结果:', font=title_font, fill='black')
+    text_y += 50 * high_res_multiplier
+    text_y = draw_multiline_text(draw, f'检测到的K线形态: {", ".join(patterns)}', (50 * high_res_multiplier, text_y), font, 1100 * high_res_multiplier, 'black')
 
-    # 留出足够的行间距
-    text_y += 80
-    draw.text((50, text_y), '支撑位和阻力位:', font=title_font, fill='black')
-    text_y += 50
-    draw.text((50, text_y), f'支撑位: {support_level}', font=font, fill='black')
-    text_y += 30
-    draw.text((50, text_y), f'阻力位: {resistance_level}', font=font, fill='black')
+    text_y += 80 * high_res_multiplier
+    draw.text((50 * high_res_multiplier, text_y), '支撑位和阻力位:', font=title_font, fill='black')
+    text_y += 50 * high_res_multiplier
+    draw.text((50 * high_res_multiplier, text_y), f'支撑位: {support_level}', font=font, fill='black')
+    text_y += 30 * high_res_multiplier
+    draw.text((50 * high_res_multiplier, text_y), f'阻力位: {resistance_level}', font=font, fill='black')
 
-    # 其他相关信息
-    text_y += 80
+    text_y += 80 * high_res_multiplier
     crypto_info = get_crypto_info(binance, symbol)
-    draw.text((50, text_y), '币种详细信息:', font=title_font, fill='black')
-    text_y += 50
-    text_y = draw_multiline_text(draw, f'市值: {crypto_info["market_cap"]}', (50, text_y), font, 1100, 'black')
-    text_y += 30
-    text_y = draw_multiline_text(draw, f'最新价格: {crypto_info["last_price"]}', (50, text_y), font, 1100, 'black')
-    text_y += 30
-    text_y = draw_multiline_text(draw, f'24小时成交量: {crypto_info["24h_volume"]}', (50, text_y), font, 1100, 'black')
-    text_y += 30
-    text_y = draw_multiline_text(draw, f'1小时涨跌幅: {crypto_info["change_1h"]:.2f}%', (50, text_y), font, 1100, 'black')
-    text_y += 30
-    text_y = draw_multiline_text(draw, f'4小时涨跌幅: {crypto_info["change_4h"]:.2f}%', (50, text_y), font, 1100, 'black')
-    text_y += 30
-    text_y = draw_multiline_text(draw, f'24小时涨跌幅: {crypto_info["change_24h"]:.2f}%', (50, text_y), font, 1100, 'black')
-    # 保存最终的报告图片
-    report_image.save(output_path)
+    draw.text((50 * high_res_multiplier, text_y), '币种详细信息:', font=title_font, fill='black')
+    text_y += 50 * high_res_multiplier
+    text_y = draw_multiline_text(draw, f'市值: {crypto_info["market_cap"]}', (50 * high_res_multiplier, text_y), font, 1100 * high_res_multiplier, 'black')
+    text_y += 30 * high_res_multiplier
+    text_y = draw_multiline_text(draw, f'最新价格: {crypto_info["last_price"]}', (50 * high_res_multiplier, text_y), font, 1100 * high_res_multiplier, 'black')
+    text_y += 30 * high_res_multiplier
+    text_y = draw_multiline_text(draw, f'24小时成交量: {crypto_info["24h_volume"]}', (50 * high_res_multiplier, text_y), font, 1100 * high_res_multiplier, 'black')
+    text_y += 30 * high_res_multiplier
+    text_y = draw_multiline_text(draw, f'1小时涨跌幅: {crypto_info["change_1h"]:.2f}%', (50 * high_res_multiplier, text_y), font, 1100 * high_res_multiplier, 'black')
+    text_y += 30 * high_res_multiplier
+    text_y = draw_multiline_text(draw, f'4小时涨跌幅: {crypto_info["change_4h"]:.2f}%', (50 * high_res_multiplier, text_y), font, 1100 * high_res_multiplier, 'black')
+    text_y += 30 * high_res_multiplier
+    text_y = draw_multiline_text(draw, f'24小时涨跌幅: {crypto_info["change_24h"]:.2f}%', (50 * high_res_multiplier, text_y), font, 1100 * high_res_multiplier, 'black')
+
+    # 将图片调整到最终尺寸
+    final_image = report_image.resize((final_width, final_height), Image.LANCZOS)
+    final_image.save(output_path)
 
 
 def delete_images_in_folder(folder_path):
@@ -212,17 +221,30 @@ async def process_and_send_patterns(patterns_detected, chat_id, bot_token, timef
     delete_images_in_folder("imgs")
 
 # 初始化 binance 交易所
-binance = ccxt.binance({
-    'rateLimit': 1200,
-    'enableRateLimit': True,
-    'proxies': {
-        'http': 'http://127.0.0.1:7890',
-        'https': 'http://127.0.0.1:7890',
-    },
-})
+if USING_PROXY:
+    binance = ccxt.binance({
+        'rateLimit': 1200,
+        'enableRateLimit': True,
+        'proxies': {
+            'http': 'http://127.0.0.1:7890',
+            'https': 'http://127.0.0.1:7890',
+        },
+    })
+else:
+    binance = ccxt.binance({
+        'rateLimit': 1200,
+        'enableRateLimit': True
+    })
 
 # 获取所有交易对的 ticker 信息
-tickers = binance.fetch_tickers()
+# tickers = binance.fetch_tickers()
+
+@retry(exceptions=ccxt.NetworkError, tries=5, delay=2, backoff=2)
+def fetch_tickers_with_retry():
+    return binance.fetch_tickers()
+
+tickers = fetch_tickers_with_retry()
+
 
 # 获取所有 USDT 的交易对，并提取交易量信息
 usdt_pairs = []
