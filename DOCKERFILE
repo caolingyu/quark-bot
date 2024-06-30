@@ -23,5 +23,11 @@ VOLUME ["/config/config.py"]
 # ENV TELEGRAM_BOT_TOKEN=your_bot_token
 # ENV TELEGRAM_CHAT_ID=your_chat_id
 
+# 如果你需要 proxy 环境变量，请设置
+ENV HTTP_PROXY="http://host.docker.internal:7890"
+ENV HTTPS_PROXY="http://host.docker.internal:7890"
+ENV http_proxy="http://host.docker.internal:7890"
+ENV https_proxy="http://host.docker.internal:7890"
+
 # 设置容器启动时执行的命令，并确保使用config目录下的config.py
 CMD ["sh", "-c", "cp /config/config.py /app/config.py && python main.py"]

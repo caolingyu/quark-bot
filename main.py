@@ -12,8 +12,12 @@ from pa.crypto_info import *
 from pa.sup_res import *
 import os
 import glob
+import httpx
 from retry import retry
 
+
+HTTP_PROXY = os.getenv('HTTP_PROXY')
+HTTPS_PROXY = os.getenv('HTTPS_PROXY')
 
 
 def draw_multiline_text(draw, text, position, font, max_width, fill):
@@ -168,7 +172,9 @@ def calculate_atr(df, period=14):
 # 配置 Telegram Bot
 bot_token = TELEGRAM_BOT_TOKEN
 chat_id = TELEGRAM_CHAT_ID
+
 bot = Bot(token=bot_token)
+
 
 async def send_message(message):
     try:
@@ -184,8 +190,6 @@ async def send_photo_via_bot(photo_path, chat_id, bot_token):
     bot = Bot(token=bot_token)
     await bot.send_photo(chat_id=chat_id, photo=open(photo_path, 'rb'))
 
-
-
 async def process_and_send_patterns(patterns_detected, chat_id, bot_token, timeframe):
     pattern_to_desc_map = {
         "Straddle": "盘整突破",
@@ -200,7 +204,7 @@ async def process_and_send_patterns(patterns_detected, chat_id, bot_token, timef
 
             image_paths = []
             for symbol in symbols[:3]:
-                df = fetch_ohlcv(symbol)
+                df = fetch_ohlcv(symbol, timeframe=timeframe)
                 df = detect_pa_index_patterns(df)
                 image_path = f"imgs/{symbol.replace('/', '-')}_{pattern.lower()}.png"
 
@@ -226,8 +230,8 @@ if USING_PROXY:
         'rateLimit': 1200,
         'enableRateLimit': True,
         'proxies': {
-            'http': 'http://127.0.0.1:7890',
-            'https': 'http://127.0.0.1:7890',
+            'http': HTTP_PROXY,
+            'https': HTTPS_PROXY,
         },
     })
 else:
