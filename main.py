@@ -5,7 +5,8 @@ import numpy as np
 from PIL import Image, ImageEnhance, ImageDraw, ImageFont
 from telegram import Bot
 from telegram.constants import ParseMode
-from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, USING_PROXY
+from telegram.request import HTTPXRequest
+from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, USING_PROXY, FONT_PATH
 from pa.pa_patterns import *
 from pa.pa_index import *
 from pa.crypto_info import *
@@ -18,6 +19,8 @@ from retry import retry
 
 HTTP_PROXY = os.getenv('HTTP_PROXY')
 HTTPS_PROXY = os.getenv('HTTPS_PROXY')
+
+FONT_PATH = os.getenv('FONT_PATH', FONT_PATH)
 
 
 def draw_multiline_text(draw, text, position, font, max_width, fill):
@@ -53,7 +56,7 @@ def combine_images(image_paths, output_path, title=None):
     y_offset = 100
 
     draw = ImageDraw.Draw(combined_image)
-    title_font = ImageFont.truetype('/Users/lingyu/Library/Fonts/NotoSansSC-Regular.ttf', 60)
+    title_font = ImageFont.truetype(FONT_PATH, 60)
 
     if title:
         draw.text((10, 10), title, font=title_font, fill='black')
@@ -63,33 +66,6 @@ def combine_images(image_paths, output_path, title=None):
         y_offset += image.size[1]
 
     combined_image.save(output_path)
-
-# def combine_images(image_paths, output_path, rows=1):
-#     images = [Image.open(image) for image in image_paths]
-    
-#     # 获取图片的尺寸
-#     widths, heights = zip(*(i.size for i in images))
-    
-#     total_width = max(widths)
-#     total_height = sum(heights)
-    
-#     # 创建一个新的空白图片对象
-#     combined_image = Image.new('RGB', (total_width, total_height))
-    
-#     y_offset = 0
-#     for image in images:
-#         combined_image.paste(image, (0, y_offset))
-#         y_offset += image.size[1]
-
-#     # 提高图片的清晰度和对比度
-#     sharpness_enhancer = ImageEnhance.Sharpness(combined_image)
-#     clarity_enhancer = ImageEnhance.Contrast(combined_image)
-
-#     enhanced_image = sharpness_enhancer.enhance(2.0)  # 锐化处理
-#     enhanced_image = clarity_enhancer.enhance(1.5)  # 对比度增强
-
-#     # 保存合并后的图片并提高分辨率
-#     enhanced_image.save(output_path, dpi=(300, 300))
 
 def create_report_image(symbol, df, patterns, support_level, resistance_level, output_path, timeframe):
     # 设置图像尺寸，增加分辨率
@@ -102,8 +78,8 @@ def create_report_image(symbol, df, patterns, support_level, resistance_level, o
     # 创建一张高分辨率的空白图片作为报告的背景
     report_image = Image.new('RGB', (width, height), 'white')
     draw = ImageDraw.Draw(report_image)
-    title_font = ImageFont.truetype('/Users/lingyu/Library/Fonts/NotoSansSC-Regular.ttf', int(40 * high_res_multiplier))
-    font = ImageFont.truetype('/Users/lingyu/Library/Fonts/NotoSansSC-Regular.ttf', int(30 * high_res_multiplier))
+    title_font = ImageFont.truetype(FONT_PATH, int(40 * high_res_multiplier))
+    font = ImageFont.truetype(FONT_PATH, int(30 * high_res_multiplier))
 
     # 绘制标题
     draw.text((50 * high_res_multiplier, 30 * high_res_multiplier), f'交易信号报告: {symbol} - {timeframe}', font=title_font, fill='black')
@@ -173,7 +149,17 @@ def calculate_atr(df, period=14):
 bot_token = TELEGRAM_BOT_TOKEN
 chat_id = TELEGRAM_CHAT_ID
 
-bot = Bot(token=bot_token)
+# bot = Bot(token=bot_token)
+
+# 配置 Telegram Bot 并使用代理
+def get_telegram_bot():
+    if USING_PROXY:
+        request = HTTPXRequest(proxy_url=HTTP_PROXY)
+        return Bot(token=TELEGRAM_BOT_TOKEN, request=request)
+    else:
+        return Bot(token=TELEGRAM_BOT_TOKEN)
+
+bot = get_telegram_bot()
 
 
 async def send_message(message):
@@ -182,13 +168,45 @@ async def send_message(message):
     except Exception as e:
         print(f"Failed to send message: {e}")
 
-async def send_message_via_bot(message, chat_id, bot_token):
-    bot = Bot(token=bot_token)
-    await bot.send_message(chat_id=chat_id, text=message)
+from telegram.error import TimedOut
 
-async def send_photo_via_bot(photo_path, chat_id, bot_token):
-    bot = Bot(token=bot_token)
-    await bot.send_photo(chat_id=chat_id, photo=open(photo_path, 'rb'))
+
+async def send_message_via_bot(message, chat_id, bot_token, max_retries=5, delay=2):
+    bot = get_telegram_bot()
+    for attempt in range(1, max_retries + 1):
+        try:
+            await bot.send_message(chat_id=chat_id, text=message)
+            return
+        except TimedOut:
+            if attempt == max_retries:
+                print(f"Failed to send message after {max_retries} attempts due to timeout")
+                raise
+            else:
+                print(f"Timed out. Retrying {attempt}/{max_retries}...")
+                await asyncio.sleep(delay * attempt)
+        except Exception as e:
+            print(f"An unexpected error occurred: {e}")
+            break
+
+
+async def send_photo_via_bot(photo_path, chat_id, bot_token, max_retries=5, delay=2):
+    bot = get_telegram_bot()
+    for attempt in range(1, max_retries + 1):
+        try:
+            with open(photo_path, 'rb') as photo:
+                await bot.send_photo(chat_id=chat_id, photo=photo)
+                return
+        except TimedOut:
+            if attempt == max_retries:
+                print(f"Failed to send photo after {max_retries} attempts due to timeout")
+                raise
+            else:
+                print(f"Timed out. Retrying {attempt}/{max_retries}...")
+                await asyncio.sleep(delay * attempt)
+        except Exception as e:
+            print(f"An unexpected error occurred: {e}")
+            break
+
 
 async def process_and_send_patterns(patterns_detected, chat_id, bot_token, timeframe):
     pattern_to_desc_map = {

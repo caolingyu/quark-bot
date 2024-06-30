@@ -13,6 +13,14 @@ RUN pip install -i https://pypi.tuna.tsinghua.edu.cn/simple --no-cache-dir -r re
 # 复制当前目录的所有内容到工作目录（但是不复制config.py）
 COPY . .
 
+# 下载字体文件到指定目录，并使用代理配置
+RUN mkdir -p /app/fonts && \
+    http_proxy=http://host.docker.internal:7890 https_proxy=http://host.docker.internal:7890 wget -O /app/fonts/NotoSansSC-Regular.ttf https://github.com/googlefonts/noto-cjk/raw/main/Sans/Mono/NotoSansMonoCJKsc-Regular.otf
+
+# # 下载字体文件到指定目录
+# RUN mkdir -p /app/fonts && \
+#     wget -O /app/fonts/NotoSansSC-Regular.ttf https://github.com/google/fonts/raw/master/ofl/notosanssc/NotoSansSC-Regular.ttf
+
 # 暴露容器内的端口（如果需要具体端口，请替换8888）
 EXPOSE 8888
 
@@ -28,6 +36,8 @@ ENV HTTP_PROXY="http://host.docker.internal:7890"
 ENV HTTPS_PROXY="http://host.docker.internal:7890"
 ENV http_proxy="http://host.docker.internal:7890"
 ENV https_proxy="http://host.docker.internal:7890"
+ENV FONT_PATH="/app/fonts/NotoSansSC-Regular.ttf"
+
 
 # 设置容器启动时执行的命令，并确保使用config目录下的config.py
 CMD ["sh", "-c", "cp /config/config.py /app/config.py && python main.py"]
