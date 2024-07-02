@@ -1,4 +1,5 @@
 import ccxt
+import time
 import asyncio
 import pandas as pd
 import numpy as np
@@ -170,6 +171,23 @@ async def send_message(message):
 
 from telegram.error import TimedOut
 
+async def send_photo_via_bot(photo_path, chat_id, bot_token, caption='', max_retries=5, delay=2):
+    bot = get_telegram_bot()
+    for attempt in range(1, max_retries + 1):
+        try:
+            with open(photo_path, 'rb') as photo:
+                await bot.send_photo(chat_id=chat_id, photo=photo, caption=caption)
+                return
+        except TimedOut:
+            if attempt == max_retries:
+                print(f"Failed to send photo after {max_retries} attempts due to timeout")
+                raise
+            else:
+                print(f"Timed out. Retrying {attempt}/{max_retries}...")
+                await asyncio.sleep(delay * attempt)
+        except Exception as e:
+            print(f"An unexpected error occurred: {e}")
+            break
 
 async def send_message_via_bot(message, chat_id, bot_token, max_retries=5, delay=2):
     bot = get_telegram_bot()
@@ -188,56 +206,46 @@ async def send_message_via_bot(message, chat_id, bot_token, max_retries=5, delay
             print(f"An unexpected error occurred: {e}")
             break
 
-
-async def send_photo_via_bot(photo_path, chat_id, bot_token, max_retries=5, delay=2):
-    bot = get_telegram_bot()
-    for attempt in range(1, max_retries + 1):
-        try:
-            with open(photo_path, 'rb') as photo:
-                await bot.send_photo(chat_id=chat_id, photo=photo)
-                return
-        except TimedOut:
-            if attempt == max_retries:
-                print(f"Failed to send photo after {max_retries} attempts due to timeout")
-                raise
-            else:
-                print(f"Timed out. Retrying {attempt}/{max_retries}...")
-                await asyncio.sleep(delay * attempt)
-        except Exception as e:
-            print(f"An unexpected error occurred: {e}")
-            break
-
-
 async def process_and_send_patterns(patterns_detected, chat_id, bot_token, timeframe):
     pattern_to_desc_map = {
         "Straddle": "盘整突破",
         "Overbought": "超买",
         "Oversold": "超卖"
-    }    
+    }
 
     for pattern, symbols in patterns_detected.items():
         if symbols:
-            symbols_text = ", ".join(symbols)
-            await send_message_via_bot(f"检测到 【{timeframe}】 级别 【{pattern_to_desc_map.get(pattern)}】的币种：{symbols_text}", chat_id, bot_token)
-
-            image_paths = []
-            for symbol in symbols[:3]:
+            for symbol in symbols:
                 df = fetch_ohlcv(symbol, timeframe=timeframe)
                 df = detect_pa_index_patterns(df)
-                image_path = f"imgs/{symbol.replace('/', '-')}_{pattern.lower()}.png"
+                image_path = f"imgs/{symbol.replace('/', '-')}_kline.png"
 
                 candle_patterns = detect_candlestick_patterns(df)
                 support_levels, resistance_levels = calculate_recent_support_resistance(df)
 
-                # 画图
-                # plot_with_oscillator(df, symbol, filename=image_path)
-                create_report_image(symbol, df, candle_patterns, support_levels, resistance_levels, image_path, timeframe)
-                image_paths.append(image_path)
+                # 生成K线图
+                plot_with_oscillator(df, symbol, filename=image_path, support=support_levels, resistance=resistance_levels)
 
-            if image_paths:
-                combined_image_path = f"imgs/{pattern.lower()}_combined.png"
-                combine_images(image_paths, combined_image_path, title=pattern_to_desc_map.get(pattern))
-                await send_photo_via_bot(combined_image_path, chat_id, bot_token)
+                # 获取文字描述
+                message = f"检测到 【{timeframe}】 级别 【{pattern_to_desc_map.get(pattern)}】的币种：{symbol}\n\n"
+                message += f'交易信号报告: {symbol} - {timeframe}\n\n'
+                message += f'检测到的K线形态: {", ".join(candle_patterns)}\n\n'
+                message += f'支撑位: {support_levels}\n'
+                message += f'阻力位: {resistance_levels}\n\n'
+                crypto_info = get_crypto_info(binance, symbol)
+                message += f'币种详细信息:\n'
+                message += f'市值: {crypto_info["market_cap"]}\n'
+                message += f'最新价格: {crypto_info["last_price"]}\n'
+                message += f'24小时成交量: {crypto_info["24h_volume"]}\n'
+                message += f'1小时涨跌幅: {crypto_info["change_1h"]:.2f}%\n'
+                message += f'4小时涨跌幅: {crypto_info["change_4h"]:.2f}%\n'
+                message += f'24小时涨跌幅: {crypto_info["change_24h"]:.2f}%\n'
+                message += f'1小时相对强弱排名: {crypto_info["change_1h"]:.2f}%\n'
+                message += f'4小时相对强弱排名: {crypto_info["change_4h"]:.2f}%\n'
+                message += f'24小时相对强弱排名: {crypto_info["change_24h"]:.2f}%\n'
+
+                # 发送图片和文字描述到Telegram
+                await send_photo_via_bot(image_path, chat_id, bot_token, caption=message)
 
     # 在发送完成后删除imgs路径下的所有图片
     delete_images_in_folder("imgs")
@@ -283,7 +291,7 @@ print("Top 50 USDT pairs by market volume:")
 print(symbols)
 
 # 获取交易对的K线数据
-def fetch_ohlcv(symbol, timeframe='15m', limit=100):
+def fetch_ohlcv(symbol, timeframe='15m', limit=200):
     ohlcv = binance.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
     df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
@@ -291,6 +299,18 @@ def fetch_ohlcv(symbol, timeframe='15m', limit=100):
     df.set_index('Timestamp', inplace=True)  # 确保时间戳为索引，并且是 DatetimeIndex
     df['Symbol'] = symbol  # 添加symbol列
     return df
+
+def fetch_all_ohlcv(symbols, timeframes):
+    """获取所有指定符号和时间框架的OHLCV数据并缓存"""
+    ohlcv_data = {}
+
+    for symbol in symbols:
+        ohlcv_data[symbol] = {}
+        for tf in timeframes:
+            df = fetch_ohlcv(symbol, timeframe=tf)
+            ohlcv_data[symbol][tf] = df
+
+    return ohlcv_data
 
 
 # 计算技术指标
@@ -317,6 +337,26 @@ def detect_pattern(df):
     return df
 
 
+def calculate_percentage_change(df):
+    """计算涨跌幅度"""
+    return ((df['Close'].iloc[-1] - df['Close'].iloc[-2]) / df['Close'].iloc[-2]) * 100
+
+def get_percentage_change_rankings(symbols, timeframes, all_ohlcv):
+    rankings = {tf: [] for tf in timeframes}
+
+    for symbol in symbols:
+        for tf in timeframes:
+            # df = fetch_ohlcv(symbol, timeframe=tf)
+            df = all_ohlcv[symbol][tf]
+            change_percent = calculate_percentage_change(df)
+            rankings[tf].append((symbol, change_percent))
+            time.sleep(5)
+
+    for tf in rankings:
+        rankings[tf] = sorted(rankings[tf], key=lambda x: x[1], reverse=True)
+
+    return rankings
+
 import asyncio
 from datetime import datetime, timedelta
 
@@ -334,61 +374,26 @@ async def run_at_specific_time():
         # 运行您的主要任务函数
         await main()
 
-
-# 回测策略
-def backtest_strategy(symbol, limit=240, atr_period=14, atr_multiplier=2):
-    df = fetch_ohlcv(symbol, limit=limit)
-    df = calculate_atr(df, period=atr_period)
-    df = detect_pa_index_patterns(df)  # 检测形态
-
-    trades = 0
-    wins = 0
-
-    for i in range(5, len(df)):
-        if all(df['Zone'].iloc[i-j] == 'Straddle' for j in range(1, 6)) and df['Zone'].iloc[i] != 'Straddle':
-            entry_price = df['Close'].iloc[i]
-            atr_value = df['ATR'].iloc[i]
-
-            if entry_price < df['Close'].iloc[i-1]:
-                # 假设开空单
-                stop_loss = entry_price + atr_multiplier * atr_value
-                take_profit = entry_price - atr_multiplier * atr_value
-                trades += 1
-                for j in range(i, len(df)):
-                    if df['Low'].iloc[j] <= take_profit:
-                        wins += 1
-                        break
-                    if df['High'].iloc[j] >= stop_loss:
-                        break
-
-            elif entry_price > df['Close'].iloc[i-1]:
-                # 假设开多单
-                stop_loss = entry_price - atr_multiplier * atr_value
-                take_profit = entry_price + atr_multiplier * atr_value
-                trades += 1
-                for j in range(i, len(df)):
-                    if df['High'].iloc[j] >= take_profit:
-                        wins += 1
-                        break
-                    if df['Low'].iloc[j] <= stop_loss:
-                        break
-
-    winrate = (wins / trades) * 100 if trades > 0 else 0
-    return winrate, trades
-
 TIMEFRAME = ['15m', '1h', '4h']
 
 # 检测特定形态并发送消息
 async def main():
-    patterns_detected = {
-        "Oversold": [],
-        "Overbought": [],
-        "Straddle": []
-    }
+    # 获取所有需要的K线数据
+    all_ohlcv = fetch_all_ohlcv(symbols, TIMEFRAME)
 
     for tf in TIMEFRAME:
+        patterns_detected = {
+            "Oversold": [],
+            "Overbought": [],
+            "Straddle": []
+        }
+
         for symbol in symbols:
-            df = fetch_ohlcv(symbol, timeframe=tf)
+            # df = fetch_ohlcv(symbol, timeframe=tf)
+            try:
+                df = all_ohlcv[symbol][tf]
+            except:
+                continue
             df = detect_pa_index_patterns(df)
 
             # if df['Zone'].iloc[-1] == 'Straddle':
@@ -398,12 +403,20 @@ async def main():
                 patterns_detected['Oversold'].append(symbol)
             elif df['Zone'].iloc[-1] == 'Overbought':
                 patterns_detected['Overbought'].append(symbol)
+            
+            time.sleep(5)
 
         await process_and_send_patterns(patterns_detected, chat_id=chat_id, bot_token=bot_token, timeframe=tf)
+
+def test_ranking():
+    print(get_percentage_change_rankings(symbols, ['4h']))
+
 
 
 # 运行主任务
 # asyncio.run(run_at_specific_time())
-asyncio.run(main())
+# asyncio.run(main())
 
 # print(backtest_strategy('BTCUSDT'))
+
+test_ranking()
