@@ -51,6 +51,58 @@ def is_doji_star(df):
 
     return abs(latest_candle['Close'] - latest_candle['Open']) < (0.1 * (latest_candle['High'] - latest_candle['Low']))
 
+
+def is_hammer(df):
+    if len(df) < 1:
+        return False
+    
+    latest_candle = df.iloc[-1]
+    
+    # 锤头线特征：小实体位于上端，下影线长度至少为实体长度的两倍，无或很小的上影线
+    body_length = abs(latest_candle['Close'] - latest_candle['Open'])
+    lower_shadow = latest_candle['Low'] - min(latest_candle['Close'], latest_candle['Open'])
+    upper_shadow = max(latest_candle['Close'], latest_candle['Open']) - latest_candle['High']
+    
+    return (lower_shadow >= 2 * body_length) and (upper_shadow < 0.1 * (latest_candle['High'] - latest_candle['Low']))
+
+
+def is_shooting_star(df):
+    if len(df) < 1:
+        return False
+    
+    latest_candle = df.iloc[-1]
+    
+    # 流星线特征：小实体位于下端，上影线长度至少为实体长度的两倍，无或很小的下影线
+    body_length = abs(latest_candle['Close'] - latest_candle['Open'])
+    upper_shadow = latest_candle['High'] - max(latest_candle['Close'], latest_candle['Open'])
+    lower_shadow = min(latest_candle['Close'], latest_candle['Open']) - latest_candle['Low']
+    
+    return (upper_shadow >= 2 * body_length) and (lower_shadow < 0.1 * (latest_candle['High'] - latest_candle['Low']))
+
+
+def is_bullish_engulfing(df):
+    if len(df) < 2:
+        return False
+    
+    first_candle = df.iloc[-2]
+    second_candle = df.iloc[-1]
+    
+    # 看涨吞没特征：第二根阳线的实体完全覆盖第一根阴线的实体
+    return (first_candle['Close'] < first_candle['Open']) and (second_candle['Close'] > second_candle['Open']) and \
+           (second_candle['Open'] < first_candle['Close']) and (second_candle['Close'] > first_candle['Open'])
+
+
+def is_bearish_engulfing(df):
+    if len(df) < 2:
+        return False
+    
+    first_candle = df.iloc[-2]
+    second_candle = df.iloc[-1]
+    
+    # 看跌吞没特征：第二根阴线的实体完全覆盖第一根阳线的实体
+    return (first_candle['Close'] > first_candle['Open']) and (second_candle['Close'] < second_candle['Open']) and \
+           (second_candle['Open'] > first_candle['Close']) and (second_candle['Close'] < first_candle['Open'])
+
 def detect_head_shoulder(df, window=3):
     roll_window = window
     df['high_roll_max'] = df['High'].rolling(window=roll_window).max()
@@ -206,9 +258,10 @@ def detect_head_shoulder_kf(df, window=3):
     mask_head_shoulder = ((df['high_roll_max'] > df['High_smooth'].shift(1)) & (df['high_roll_max'] > df['High_smooth'].shift(-1)) & (df['High_smooth'] < df['High_smooth'].shift(1)) & (df['High_smooth'] < df['High_smooth'].shift(-1)))
     mask_inv_head_shoulder = ((df['low_roll_min'] < df['Low_smooth'].shift(1)) & (df['low_roll_min'] < df['Low_smooth'].shift(-1)) & (df['Low_smooth'] > df['Low_smooth'].shift(1)) & (df['Low_smooth'] > df['Low_smooth'].shift(-1)))
     df['head_shoulder_pattern'] = np.nan
-    df.loc[mask_head_shoulder, 'head_shoulder_pattern'] = 'Head and Shoulder'
-    df.loc[mask_inv_head_shoulder, 'head_shoulder_pattern'] = 'Inverse Head and Shoulder'
-    return df['head_shoulder_pattern'].dropna().tolist()
+    df.loc[mask_head_shoulder, 'head_shoulder_pattern'] = '头肩顶'
+    df.loc[mask_inv_head_shoulder, 'head_shoulder_pattern'] = '头肩底'
+    latest_pattern = df['head_shoulder_pattern'].iloc[-1]
+    return latest_pattern
 
 def wavelet_denoise(series, wavelet='db1', level=1):
     coeff = pywt.wavedec(series, wavelet, mode="per")
@@ -217,6 +270,7 @@ def wavelet_denoise(series, wavelet='db1', level=1):
     return pywt.waverec(coeff, wavelet, mode="per")
 
 def detect_head_shoulder_wavelet(df, window=3):
+    print(df)
     roll_window = window
     df['High_smooth'] = wavelet_denoise(df['High'], 'db1', level=1)
     df['Low_smooth'] = wavelet_denoise(df['Low'], 'db1', level=1)
@@ -229,9 +283,29 @@ def detect_head_shoulder_wavelet(df, window=3):
     df.loc[mask_inv_head_shoulder, 'head_shoulder_pattern'] = '头肩底'
     # 检查当前最新一根K线的pattern
     latest_pattern = df['head_shoulder_pattern'].iloc[-1]
-    print(df['head_shoulder_pattern'].tolist())
     return latest_pattern
-    
+
+def fibonacci_retracement_levels(df):
+    max_price = df['High'].max()
+    min_price = df['Low'].min()
+    diff = max_price - min_price
+    levels = {
+        '23.6%': max_price - 0.236 * diff,
+        '38.2%': max_price - 0.382 * diff,
+        '50%': max_price - 0.5 * diff,
+        '61.8%': max_price - 0.618 * diff,
+        '100%': min_price
+    }
+    return levels
+
+def detect_fibonacci_level(df):
+    levels = fibonacci_retracement_levels(df)
+    current_price = df['Close'].iloc[-1]
+    for level, value in levels.items():
+        if current_price >= value:
+            return f"当前价格位于斐波那契回调{level}以上."
+    return "当前价格不处于斐波那契回调"
+
 def detect_candlestick_patterns(df):
     patterns = []
 
@@ -241,6 +315,14 @@ def detect_candlestick_patterns(df):
         patterns.append('黄昏星')
     if is_doji_star(df):
         patterns.append('十字星')
+    if is_hammer(df):
+        patterns.append('看涨pinbar')
+    if is_shooting_star(df):
+        patterns.append('看跌pinbar')
+    if is_bullish_engulfing(df):
+        patterns.append('看涨吞没')
+    if is_bearish_engulfing(df):
+        patterns.append('看跌吞没')
 
     multiple_tops_bottoms = detect_multiple_tops_bottoms(df)
     if not pd.isna(multiple_tops_bottoms):
@@ -262,8 +344,8 @@ def detect_candlestick_patterns(df):
     if not pd.isna(double_top_bottom):
         patterns.append(double_top_bottom)
 
-    head_shoulder_wavelet = detect_head_shoulder_wavelet(df)
-    if not pd.isna(head_shoulder_wavelet):
-        patterns.append(head_shoulder_wavelet)
+    head_shoulder_kf = detect_head_shoulder_kf(df)
+    if not pd.isna(head_shoulder_kf):
+        patterns.append(head_shoulder_kf)
 
     return patterns

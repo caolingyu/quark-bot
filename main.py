@@ -107,7 +107,9 @@ def create_report_image(symbol, df, patterns, support_level, resistance_level, o
     draw.text((50 * high_res_multiplier, text_y), f'阻力位: {resistance_level}', font=font, fill='black')
 
     text_y += 80 * high_res_multiplier
+
     crypto_info = get_crypto_info(binance, symbol)
+
     draw.text((50 * high_res_multiplier, text_y), '币种详细信息:', font=title_font, fill='black')
     text_y += 50 * high_res_multiplier
     text_y = draw_multiline_text(draw, f'市值: {crypto_info["market_cap"]}', (50 * high_res_multiplier, text_y), font, 1100 * high_res_multiplier, 'black')
@@ -206,7 +208,7 @@ async def send_message_via_bot(message, chat_id, bot_token, max_retries=5, delay
             print(f"An unexpected error occurred: {e}")
             break
 
-async def process_and_send_patterns(patterns_detected, chat_id, bot_token, timeframe):
+async def process_and_send_patterns(patterns_detected, chat_id, bot_token, timeframe, pct_ranking, all_ohlcv):
     pattern_to_desc_map = {
         "Straddle": "盘整突破",
         "Overbought": "超买",
@@ -216,12 +218,14 @@ async def process_and_send_patterns(patterns_detected, chat_id, bot_token, timef
     for pattern, symbols in patterns_detected.items():
         if symbols:
             for symbol in symbols:
-                df = fetch_ohlcv(symbol, timeframe=timeframe)
+                # df = fetch_ohlcv(symbol, timeframe=timeframe)
+                df = all_ohlcv[symbol][timeframe]
                 df = detect_pa_index_patterns(df)
                 image_path = f"imgs/{symbol.replace('/', '-')}_kline.png"
 
                 candle_patterns = detect_candlestick_patterns(df)
                 support_levels, resistance_levels = calculate_recent_support_resistance(df)
+                fib_level = detect_fibonacci_level(df)
 
                 # 生成K线图
                 plot_with_oscillator(df, symbol, filename=image_path, support=support_levels, resistance=resistance_levels)
@@ -232,17 +236,20 @@ async def process_and_send_patterns(patterns_detected, chat_id, bot_token, timef
                 message += f'检测到的K线形态: {", ".join(candle_patterns)}\n\n'
                 message += f'支撑位: {support_levels}\n'
                 message += f'阻力位: {resistance_levels}\n\n'
-                crypto_info = get_crypto_info(binance, symbol)
+                message += f'斐波那契: {fib_level}\n\n'
+                crypto_info = get_crypto_info(binance, symbol, all_ohlcv)
                 message += f'币种详细信息:\n'
-                message += f'市值: {crypto_info["market_cap"]}\n'
+                message += f'Quote Volume: {crypto_info["quote_volume"]}\n'
                 message += f'最新价格: {crypto_info["last_price"]}\n'
                 message += f'24小时成交量: {crypto_info["24h_volume"]}\n'
                 message += f'1小时涨跌幅: {crypto_info["change_1h"]:.2f}%\n'
                 message += f'4小时涨跌幅: {crypto_info["change_4h"]:.2f}%\n'
                 message += f'24小时涨跌幅: {crypto_info["change_24h"]:.2f}%\n'
-                message += f'1小时相对强弱排名: {crypto_info["change_1h"]:.2f}%\n'
-                message += f'4小时相对强弱排名: {crypto_info["change_4h"]:.2f}%\n'
-                message += f'24小时相对强弱排名: {crypto_info["change_24h"]:.2f}%\n'
+                # 添加相对强弱排名信息
+                for tf in TIMEFRAME:
+                    rank = pct_ranking[tf].get(symbol, "N/A")
+                    message += f'相对强弱排名 ({tf}): {rank}\n'
+
 
                 # 发送图片和文字描述到Telegram
                 await send_photo_via_bot(image_path, chat_id, bot_token, caption=message)
@@ -308,10 +315,9 @@ def fetch_all_ohlcv(symbols, timeframes):
         ohlcv_data[symbol] = {}
         for tf in timeframes:
             df = fetch_ohlcv(symbol, timeframe=tf)
-            ohlcv_data[symbol][tf] = df
+            ohlcv_data[symbol][tf] = df.iloc[:-1,]
 
     return ohlcv_data
-
 
 # 计算技术指标
 def calculate_indicators(df):
@@ -342,18 +348,17 @@ def calculate_percentage_change(df):
     return ((df['Close'].iloc[-1] - df['Close'].iloc[-2]) / df['Close'].iloc[-2]) * 100
 
 def get_percentage_change_rankings(symbols, timeframes, all_ohlcv):
-    rankings = {tf: [] for tf in timeframes}
+    rankings = {tf: {} for tf in timeframes}
 
     for symbol in symbols:
         for tf in timeframes:
-            # df = fetch_ohlcv(symbol, timeframe=tf)
             df = all_ohlcv[symbol][tf]
             change_percent = calculate_percentage_change(df)
-            rankings[tf].append((symbol, change_percent))
-            time.sleep(5)
+            rankings[tf][symbol] = change_percent
 
     for tf in rankings:
-        rankings[tf] = sorted(rankings[tf], key=lambda x: x[1], reverse=True)
+        sorted_rankings = sorted(rankings[tf].items(), key=lambda item: item[1], reverse=True)
+        rankings[tf] = {symbol: rank for rank, (symbol, _) in enumerate(sorted_rankings, 1)}
 
     return rankings
 
@@ -380,14 +385,13 @@ TIMEFRAME = ['15m', '1h', '4h']
 async def main():
     # 获取所有需要的K线数据
     all_ohlcv = fetch_all_ohlcv(symbols, TIMEFRAME)
-
+    pct_ranking = get_percentage_change_rankings(symbols, TIMEFRAME, all_ohlcv)
     for tf in TIMEFRAME:
         patterns_detected = {
             "Oversold": [],
             "Overbought": [],
             "Straddle": []
         }
-
         for symbol in symbols:
             # df = fetch_ohlcv(symbol, timeframe=tf)
             try:
@@ -406,7 +410,8 @@ async def main():
             
             time.sleep(5)
 
-        await process_and_send_patterns(patterns_detected, chat_id=chat_id, bot_token=bot_token, timeframe=tf)
+        await process_and_send_patterns(patterns_detected, chat_id=chat_id, bot_token=bot_token, timeframe=tf, 
+                                        pct_ranking=pct_ranking, all_ohlcv=all_ohlcv)
 
 def test_ranking():
     print(get_percentage_change_rankings(symbols, ['4h']))
@@ -415,8 +420,6 @@ def test_ranking():
 
 # 运行主任务
 # asyncio.run(run_at_specific_time())
-# asyncio.run(main())
+asyncio.run(main())
 
 # print(backtest_strategy('BTCUSDT'))
-
-test_ranking()
