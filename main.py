@@ -208,6 +208,17 @@ async def send_message_via_bot(message, chat_id, bot_token, max_retries=5, delay
             print(f"An unexpected error occurred: {e}")
             break
 
+
+def convert_to_chinese_unit(value):
+    value = float(value)
+    units = ['', '千', '万', '亿']
+    unit_index = 0
+    while value >= 1000 and unit_index < len(units) - 1:
+        value /= 1000.0
+        unit_index += 1
+    # 为了保证精度，这里对浮点数进行格式化处理，保留一位小数
+    return f'{value:.1f}{units[unit_index]}'
+
 async def process_and_send_patterns(patterns_detected, chat_id, bot_token, timeframe, pct_ranking, all_ohlcv):
     pattern_to_desc_map = {
         "Straddle": "盘整突破",
@@ -226,6 +237,8 @@ async def process_and_send_patterns(patterns_detected, chat_id, bot_token, timef
                 candle_patterns = detect_candlestick_patterns(df)
                 support_levels, resistance_levels = calculate_recent_support_resistance(df)
                 fib_level = detect_fibonacci_level(df)
+                ma_analysis = analyze_latest_moving_averages(df)
+
 
                 # 生成K线图
                 plot_with_oscillator(df, symbol, filename=image_path, support=support_levels, resistance=resistance_levels)
@@ -237,14 +250,20 @@ async def process_and_send_patterns(patterns_detected, chat_id, bot_token, timef
                 message += f'支撑位: {support_levels}\n'
                 message += f'阻力位: {resistance_levels}\n\n'
                 message += f'斐波那契: {fib_level}\n\n'
+                message += f'均线组形态: {ma_analysis.get('Trend')}\n\n'
+                message += f'均线组密集程度: {ma_analysis.get('Density')}\n\n'
+
                 crypto_info = get_crypto_info(binance, symbol, all_ohlcv)
+                crypto_quote_volume = convert_to_chinese_unit(crypto_info["quote_volume"])
+                crypto_24h_volume = convert_to_chinese_unit(crypto_info["24h_volume"])
+
                 message += f'币种详细信息:\n'
-                message += f'Quote Volume: {crypto_info["quote_volume"]}\n'
-                message += f'最新价格: {crypto_info["last_price"]}\n'
-                message += f'24小时成交量: {crypto_info["24h_volume"]}\n'
+                message += f'Quote Volume: {crypto_quote_volume}\n'
+                message += f'最新价格: {str(crypto_info["last_price"])}\n'
+                message += f'24小时成交量: {crypto_24h_volume}\n'
                 message += f'1小时涨跌幅: {crypto_info["change_1h"]:.2f}%\n'
                 message += f'4小时涨跌幅: {crypto_info["change_4h"]:.2f}%\n'
-                message += f'24小时涨跌幅: {crypto_info["change_24h"]:.2f}%\n'
+                message += f'24小时涨跌幅: {crypto_info["change_24h"]:.2f}%\n\n'
                 # 添加相对强弱排名信息
                 for tf in TIMEFRAME:
                     rank = pct_ranking[tf].get(symbol, "N/A")

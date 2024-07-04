@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 from pykalman import KalmanFilter
 import pywt
+import talib
 
 def is_morning_star(df):
     if len(df) < 3:
@@ -305,6 +306,75 @@ def detect_fibonacci_level(df):
         if current_price >= value:
             return f"当前价格位于斐波那契回调{level}以上."
     return "当前价格不处于斐波那契回调"
+
+def analyze_latest_moving_averages(df):
+    """
+    分析股票收盘价的指数移动平均线(EMA)状态，特别关注最新一根K线。
+
+    参数:
+    df (DataFrame): 包含至少'Close'列的DataFrame，表示股票收盘价。
+
+    返回:
+    dict: 包含最新K线的EMA分析结果，包括趋势状态、交叉情况、均线密集度和价格与均线组的平均距离。
+    """
+    
+    # 确保DataFrame非空并获取最后一行数据
+    if df.empty:
+        return {}
+    
+    # 计算EMA
+    df['EMA20'] = talib.EMA(df['Close'], timeperiod=20)
+    df['EMA60'] = talib.EMA(df['Close'], timeperiod=60)
+    df['EMA120'] = talib.EMA(df['Close'], timeperiod=120)
+    latest_row = df.iloc[-1]
+
+    ema20 = talib.EMA(df['Close'], timeperiod=20).iloc[-1]
+    ema60 = talib.EMA(df['Close'], timeperiod=60).iloc[-1]
+    ema120 = talib.EMA(df['Close'], timeperiod=120).iloc[-1]
+    
+    # 分析结果初始化
+    analysis_results = {}
+    
+    # 多头排列或空头排列判断
+    if ema20 > ema60 > ema120:
+        analysis_results['Trend'] = '多头排列'
+    elif ema20 < ema60 < ema120:
+        analysis_results['Trend'] = '空头排列'
+    else:
+        analysis_results['Trend'] = '中性'
+    
+    # 金叉或死叉检测
+    if latest_row['EMA20'] > latest_row['EMA60'] and df.iloc[-2]['EMA20'] < df.iloc[-2]['EMA60']:
+        analysis_results['Crossover'] = '金叉'
+    elif latest_row['EMA20'] < latest_row['EMA60'] and df.iloc[-2]['EMA20'] > df.iloc[-2]['EMA60']:
+        analysis_results['Crossover'] = '死叉'
+    else:
+        analysis_results['Crossover'] = '无交叉'
+    
+    # 均线密集程度评估
+    MA_DENSITY_THRESHOLD_NEAR = 0.02  # 近密阈值
+    MA_DENSITY_THRESHOLD_MEDIUM = 0.05  # 中密阈值
+    if abs(ema20 - ema120) / latest_row['Close'] <= MA_DENSITY_THRESHOLD_NEAR:
+        analysis_results['Density'] = '非常密集'
+    elif abs(ema20 - ema120) / latest_row['Close'] <= MA_DENSITY_THRESHOLD_MEDIUM:
+        analysis_results['Density'] = '较密集'
+    else:
+        analysis_results['Density'] = '分散'
+    
+    # 当前价格与均线组的平均距离
+    PRICE_DISTANCE_THRESHOLD_NEAR = 0.01  # 接近阈值
+    PRICE_DISTANCE_THRESHOLD_MEDIUM = 0.03  # 中等阈值
+    price_distance_avg = (abs(latest_row['Close'] - ema20) + 
+                        abs(latest_row['Close'] - ema60) + 
+                        abs(latest_row['Close'] - ema120)) / 3 / latest_row['Close']
+    if price_distance_avg <= PRICE_DISTANCE_THRESHOLD_NEAR:
+        analysis_results['Distance_to_MA_Avg'] = '非常接近'
+    elif price_distance_avg <= PRICE_DISTANCE_THRESHOLD_MEDIUM:
+        analysis_results['Distance_to_MA_Avg'] = '接近'
+    else:
+        analysis_results['Distance_to_MA_Avg'] = '远离'
+        
+    return analysis_results
 
 def detect_candlestick_patterns(df):
     patterns = []
