@@ -7,11 +7,40 @@ WORKDIR /app
 # 将 requirements.txt 复制到工作目录
 COPY requirements.txt .
 
-# 安装 Python 依赖包
-RUN pip install -i https://pypi.tuna.tsinghua.edu.cn/simple --no-cache-dir -r requirements.txt
+# 如果你需要 proxy 环境变量，请设置
+ENV HTTP_PROXY="http://host.docker.internal:7890"
+ENV HTTPS_PROXY="http://host.docker.internal:7890"
+ENV http_proxy="http://host.docker.internal:7890"
+ENV https_proxy="http://host.docker.internal:7890"
+ENV no_proxy="localhost,127.0.0.1"
+ENV NO_PROXY="localhost,127.0.0.1"
+ENV FONT_PATH="/app/fonts/NotoSansSC-Regular.ttf"
+
+
+# 安装依赖库及其他必要软件包
+RUN apt-get update && \
+    apt-get install -y apt-transport-https ca-certificates \
+                       libffi-dev libssl-dev libgmp-dev build-essential wget \
+                       automake gcc g++ make apt-utils && \
+    # 下载并安装 TA-LIB 源代码
+    http_proxy=http://host.docker.internal:7890 \
+    https_proxy=http://host.docker.internal:7890 \
+    wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz && \
+    tar -xzf ta-lib-0.4.0-src.tar.gz && \
+    cd ta-lib/ && \
+    # 更新 config.guess 和 config.sub 文件
+    wget -O config.guess 'http://savannah.gnu.org/cgi-bin/viewcvs/*checkout*/config/config/config.guess' && \
+    wget -O config.sub 'http://savannah.gnu.org/cgi-bin/viewcvs/*checkout*/config/config/config.sub' && \
+    ./configure --prefix=/usr && \
+    make && make install && \
+    cd .. && rm -rf ta-lib ta-lib-0.4.0-src.tar.gz && \
+    # 安装 Python 包
+    pip install -i https://pypi.tuna.tsinghua.edu.cn/simple --no-cache-dir ta-lib && \
+    pip install -i https://pypi.tuna.tsinghua.edu.cn/simple --no-cache-dir -r requirements.txt
 
 # 复制当前目录的所有内容到工作目录（但是不复制config.py）
 COPY . .
+
 
 # 下载字体文件到指定目录，并使用代理配置
 RUN mkdir -p /app/fonts && \
@@ -30,14 +59,6 @@ VOLUME ["/config/config.py"]
 # 设置环境变量（可选）
 # ENV TELEGRAM_BOT_TOKEN=your_bot_token
 # ENV TELEGRAM_CHAT_ID=your_chat_id
-
-# 如果你需要 proxy 环境变量，请设置
-ENV HTTP_PROXY="http://host.docker.internal:7890"
-ENV HTTPS_PROXY="http://host.docker.internal:7890"
-ENV http_proxy="http://host.docker.internal:7890"
-ENV https_proxy="http://host.docker.internal:7890"
-ENV FONT_PATH="/app/fonts/NotoSansSC-Regular.ttf"
-
 
 # 设置容器启动时执行的命令，并确保使用config目录下的config.py
 CMD ["sh", "-c", "cp /config/config.py /app/config.py && python main.py"]
