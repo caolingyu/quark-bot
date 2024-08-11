@@ -16,7 +16,7 @@ binance = ccxt.binance({
 })
 
 # 获取交易对的K线数据
-def fetch_ohlcv(symbol, timeframe='1d', limit=100):
+def fetch_ohlcv(symbol, timeframe='1d', limit=200):
     ohlcv = binance.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
     df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
@@ -94,7 +94,7 @@ def ema(series, length):
     return series.ewm(span=length, adjust=False).mean()
 
 # 绘制K线和EMA线
-def plot_with_oscillator(df, symbol, ema_length=20, straddle_area=5.0, filename=None):
+def plot_with_oscillator(df, symbol, ema_length=20, straddle_area=5.0, support=None, resistance=None, filename=None):
     df = df.iloc[30:]
     df['EMA'] = ema(df['Close'], ema_length)
 
@@ -106,7 +106,7 @@ def plot_with_oscillator(df, symbol, ema_length=20, straddle_area=5.0, filename=
     ema_plot = mpf.make_addplot(df['EMA'], color='orange')
 
     # 添加PA振荡器线，设置为第一个副图
-    pa_plot = mpf.make_addplot(df['PA'], panel=1, color='black', ylabel='PA Oscillator')
+    pa_plot = mpf.make_addplot(df['PA'], panel=1, color='black', ylabel='PA')
 
     # 添加Overbought和Oversold阈值线，设置为第一个副图
     overbought_line = mpf.make_addplot([80]*len(df), panel=1, color='gray', linestyle='--', secondary_y=False)
@@ -116,9 +116,17 @@ def plot_with_oscillator(df, symbol, ema_length=20, straddle_area=5.0, filename=
     straddle_upper = mpf.make_addplot([straddle_area]*len(df), panel=1, color='gray', linestyle='--', secondary_y=False)
     straddle_lower = mpf.make_addplot([-straddle_area]*len(df), panel=1, color='gray', linestyle='--', secondary_y=False)
 
-    # 绘制图表，包括K线图和所有添加的线图
+    # 添加支撑和阻力线
+    support_line = mpf.make_addplot([support]*len(df), color='blue', linestyle='--') if support is not None else None
+    resistance_line = mpf.make_addplot([resistance]*len(df), color='red', linestyle='--') if resistance is not None else None
+
     apds = [ema_plot, pa_plot, overbought_line, oversold_line, straddle_upper, straddle_lower]
-    fig, axlist = mpf.plot(df, type='candle', style=s, addplot=apds, volume=False, panel_ratios=(6, 2), figsize=(10, 8), title=f'{symbol} Candlestick Chart with EMA and PA Oscillator', returnfig=True)
+    if support_line:
+        apds.append(support_line)
+    if resistance_line:
+        apds.append(resistance_line)
+
+    fig, axlist = mpf.plot(df, type='candle', style=s, addplot=apds, volume=False, panel_ratios=(6, 2), figsize=(10, 8), returnfig=True)
     
     if filename:
         fig.savefig(filename)
@@ -129,7 +137,7 @@ def main():
     symbol = 'BTC/USDT'
     straddle_area = 5.0
     
-    df = fetch_ohlcv(symbol, timeframe='1d', limit=100)
+    df = fetch_ohlcv(symbol, timeframe='4h', limit=50)
     df = pa_oscillator(df)
     df = check_zones(df, straddle_area)
 
