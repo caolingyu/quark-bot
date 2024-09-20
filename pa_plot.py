@@ -48,6 +48,75 @@ def add_trendlines(df, fig, window=10):
                 name=name
             ), row=1, col=1)
 
+def calculate_zigzag(df, deviation_percentage=5):
+    high = df['High'].values
+    low = df['Low'].values
+    
+    deviation = deviation_percentage / 100
+    
+    zigzag = np.zeros(len(high))
+    trend = 0
+    last_high = high[0]
+    last_low = low[0]
+    high_index = 0
+    low_index = 0
+
+    for i in range(1, len(high)):
+        if trend == 0 or trend == 1:
+            if high[i] > last_high:
+                last_high = high[i]
+                high_index = i
+            elif low[i] < last_high * (1 - deviation):
+                if trend == 1:
+                    zigzag[high_index] = last_high
+                trend = -1
+                last_low = low[i]
+                low_index = i
+        
+        if trend == 0 or trend == -1:
+            if low[i] < last_low:
+                last_low = low[i]
+                low_index = i
+            elif high[i] > last_low * (1 + deviation):
+                if trend == -1:
+                    zigzag[low_index] = last_low
+                trend = 1
+                last_high = high[i]
+                high_index = i
+
+    # Set the last point
+    if trend == 1:
+        zigzag[high_index] = last_high
+    elif trend == -1:
+        zigzag[low_index] = last_low
+
+    print(f"Number of non-zero zigzag points: {np.count_nonzero(zigzag)}")  # 调试信息
+    return zigzag
+
+def add_zigzag(df, fig, deviation=1):
+    zigzag = calculate_zigzag(df, deviation)
+    
+    # 找出所有非零的 zigzag 点
+    zigzag_points = [(df.index[i], value) for i, value in enumerate(zigzag) if value != 0]
+    
+    print(f"Number of zigzag points: {len(zigzag_points)}")  # 调试信息
+    
+    # 如果没有足够的点，就不添加 zigzag 线
+    if len(zigzag_points) < 2:
+        print("Not enough zigzag points to draw the line")  # 调试信息
+        return
+    
+    # 添加 zigzag 线到图表
+    fig.add_trace(go.Scatter(
+        x=[point[0] for point in zigzag_points],
+        y=[point[1] for point in zigzag_points],
+        mode='lines',
+        line=dict(color='magenta', width=2),  # 改变颜色为洋红色，增加宽度
+        name='ZigZag'
+    ), row=1, col=1)
+    
+    print("Zigzag line added to the chart")  # 调试信息
+
 def execute_trade(df, i, capital, risk_per_trade, tick_size, dca_levels):
     signal_candle = df.iloc[i]
     next_candle = df.iloc[i + 1]
@@ -146,6 +215,10 @@ def backtest_and_plot(df, initial_capital=10000, risk_per_trade=0.02, dca_levels
     for i in range(len(df)):
         fig.add_trace(go.Scatter(x=[df.index[i], df.index[i]], y=[df['Low'].iloc[i], df['High'].iloc[i]], mode='lines', line=dict(color=colors_kline[i], width=1), showlegend=False), row=1, col=1)
         fig.add_trace(go.Bar(x=[df.index[i]], y=[abs(df['Close'].iloc[i] - df['Open'].iloc[i])], base=min(df['Open'].iloc[i], df['Close'].iloc[i]), marker_color=colors_kline[i], marker_line_width=0, width=0.6, showlegend=False), row=1, col=1)
+
+    # 添加 zigzag 线
+    add_zigzag(df, fig, deviation=1)
+    print("add_zigzag function called")  # 调试信息
 
     # Add buy and sell signals
     fig.add_trace(go.Scatter(x=buy_df.index, y=buy_df['price'], mode='markers', marker=dict(symbol='triangle-up', size=10, color='green'), name='Buy'), row=1, col=1)
